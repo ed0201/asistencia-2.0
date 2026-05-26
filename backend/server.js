@@ -12,9 +12,15 @@ const JWT_SECRET = process.env.JWT_SECRET || 'cambia_esto_en_produccion_123';
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
-app.use(bodyParser.text({ type: '*/*' }));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+app.use((req, res, next) => {
+  if (req.body === undefined) {
+    bodyParser.text({ type: '*/*' })(req, res, next);
+  } else {
+    next();
+  }
+});
 
 // ─── MongoDB ──────────────────────────────────────────────────────────────────
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/asistencia_pwa')
