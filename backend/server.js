@@ -82,7 +82,7 @@ const IDS_ADMIN = (process.env.IDS_ADMIN || '1,2').split(',').map(s => s.trim())
 
 // Health check
 app.get('/', (req, res) => res.json({ ok: true, sistema: 'Asistencia PWA v2', ts: new Date() }));
-
+app.get('/debug', (req, res) => res.json({ user: process.env.AUTH_USER, pass: process.env.AUTH_PASS }));
 // Login
 app.post('/api/auth/login', (req, res) => {
   const { usuario, password } = req.body;
