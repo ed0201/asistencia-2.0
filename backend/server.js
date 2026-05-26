@@ -86,10 +86,13 @@ app.get('/debug', (req, res) => res.json({ user: process.env.AUTH_USER, pass: pr
 // Login
 app.post('/api/auth/login', (req, res) => {
   const { usuario, password } = req.body;
-  if (usuario !== AUTH_USER || password !== AUTH_PASS) {
+  const validUser = process.env.AUTH_USER || 'admin';
+  const validPass = process.env.AUTH_PASS || 'admin123';
+  if (usuario !== validUser || password !== validPass) {
     return res.status(401).json({ error: 'Credenciales incorrectas' });
   }
-  const token = jwt.sign({ usuario, role: 'admin' }, JWT_SECRET, { expiresIn: '30d' });
+  const secret = process.env.JWT_SECRET || 'cambia_esto_en_produccion_123';
+  const token = jwt.sign({ usuario, role: 'admin' }, secret, { expiresIn: '30d' });
   res.json({ token, usuario });
 });
 
