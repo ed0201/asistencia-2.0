@@ -86,8 +86,12 @@ app.get('/debug', (req, res) => res.json({ user: process.env.AUTH_USER, pass: pr
 // Login
 app.post('/api/auth/login', (req, res) => {
   const { usuario, password } = req.body;
+  console.log('LOGIN INTENTO:', usuario, password);
+  console.log('ENV USER:', process.env.AUTH_USER);
+  console.log('ENV PASS:', process.env.AUTH_PASS);
   const validUser = process.env.AUTH_USER || 'admin';
   const validPass = process.env.AUTH_PASS || 'admin123';
+  console.log('COMPARANDO:', usuario === validUser, password === validPass);
   if (usuario !== validUser || password !== validPass) {
     return res.status(401).json({ error: 'Credenciales incorrectas' });
   }
