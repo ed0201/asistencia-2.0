@@ -77,6 +77,18 @@ const SyncLogSchema = new mongoose.Schema({
 });
 const SyncLog = mongoose.model('SyncLog', SyncLogSchema);
 
+const HorarioLogSchema = new mongoose.Schema({
+  empleadoId:    { type: String, required: true, index: true },
+  nombre:        { type: String },
+  cambiadoPor:   { type: String, default: 'admin' },
+  descripcion:   { type: String },
+  valorAnterior: { type: mongoose.Schema.Types.Mixed },
+  valorNuevo:    { type: mongoose.Schema.Types.Mixed },
+  fecha:         { type: Date, default: Date.now },
+});
+const HorarioLog = mongoose.model('HorarioLog', HorarioLogSchema);
+
+
 // ─── Seed festivos para año actual y siguiente ────────────────────────────────
 async function seedFestivos() {
   const count = await Festivo.countDocuments();
@@ -495,7 +507,27 @@ app.get('/api/horarios', requireAuth, async (req, res) => {
 });
 app.put('/api/horarios/:empleadoId', requireAuth, async (req, res) => {
   try {
+    const anterior = await Horario.findOne({ empleadoId: req.params.empleadoId }).lean();
     const h = await Horario.findOneAndUpdate({ empleadoId:req.params.empleadoId }, { $set:req.body }, { new:true, upsert:true });
+
+    // Registrar cambio en el log
+    const cambios = [];
+    if (req.body.horarios) cambios.push('horarios');
+    if (req.body.toleranciaMinutos !== undefined) cambios.push('toleranciaMinutos');
+    if (req.body.sucursal) cambios.push('sucursal');
+    if (req.body.notas !== undefined) cambios.push('notas');
+
+    if (cambios.length > 0 && anterior) {
+      await HorarioLog.create({
+        empleadoId:    req.params.empleadoId,
+        nombre:        h.nombre + ' ' + h.apellido,
+        cambiadoPor:   req.user?.usuario || 'admin',
+        descripcion:   `Modificó: ${cambios.join(', ')}`,
+        valorAnterior: Object.fromEntries(cambios.map(c => [c, anterior[c]])),
+        valorNuevo:    Object.fromEntries(cambios.map(c => [c, req.body[c]])),
+      });
+    }
+
     res.json({ ok:true, data:h });
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
@@ -536,6 +568,113 @@ app.post('/api/registros/manual', requireAuth, async (req, res) => {
 app.get('/api/sync/logs', requireAuth, async (req, res) => {
   const logs = await SyncLog.find().sort({ fechaSync:-1 }).limit(20).lean();
   res.json({ ok:true, data:logs });
+});
+
+
+// ─── API Log de cambios de horario ───────────────────────────────────────────
+app.get('/api/horarios/logs', requireAuth, async (req, res) => {
+  try {
+    const { empleadoId } = req.query;
+    const filter = empleadoId ? { empleadoId } : {};
+    const logs = await HorarioLog.find(filter).sort({ fecha: -1 }).limit(50).lean();
+    res.json({ ok: true, data: logs });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── API Reporte mensual ──────────────────────────────────────────────────────
+app.get('/api/reporte', requireAuth, async (req, res) => {
+  try {
+    const { mes, anio, sucursal } = req.query;
+    const now = new Date();
+    const y   = parseInt(anio || now.getFullYear());
+    const m   = parseInt(mes  || now.getMonth() + 1) - 1;
+    const inicio = new Date(y, m, 1);
+    const fin    = new Date(y, m + 1, 0, 23, 59, 59);
+
+    const filtroSuc = sucursal && sucursal !== 'Todas' ? { sucursal } : {};
+    const mesStr = String(m+1).padStart(2,'0');
+    const festivosActivos = await Festivo.find({
+      fecha: { $gte:`${y}-${mesStr}-01`, $lte:`${y}-${mesStr}-31` },
+      activo: true,
+    }).lean();
+    const mapaFestivos = {};
+    for (const f of festivosActivos) {
+      if (!f.aplica || f.aplica === 'ambas' || !sucursal || sucursal === 'Todas' || f.aplica === sucursal) {
+        mapaFestivos[f.fecha] = f;
+      }
+    }
+
+    const [registros, horarios] = await Promise.all([
+      Registro.find({ fechaHora:{ $gte:inicio, $lte:fin }, tipoRegistro:'Asistencia', ...filtroSuc }).sort({ fechaHora:1 }).lean(),
+      Horario.find({ activo:true }).lean(),
+    ]);
+
+    const regPorEmpleadoDia = {};
+    for (const r of registros) {
+      const d = new Date(r.fechaHora);
+      const fk = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      const key = `${r.empleadoId}_${fk}`;
+      if (!regPorEmpleadoDia[key]) regPorEmpleadoDia[key] = [];
+      regPorEmpleadoDia[key].push(r);
+    }
+
+    const DIAS = ['domingo','lunes','martes','miercoles','jueves','viernes','sabado'];
+    function horaAMinutos(str) { if (!str) return null; const [h,m]=str.split(':').map(Number); return h*60+m; }
+    function getHorarioDia(h, fecha) { return h.horarios?.[DIAS[new Date(fecha).getDay()]] || null; }
+
+    const reporte = [];
+    for (const h of horarios) {
+      if (filtroSuc.sucursal && h.sucursal !== filtroSuc.sucursal) continue;
+      let aTiempo=0, retardos=0, faltas=0, diasLibres=0, diasFestivos=0, totalMinutos=0;
+      const detalle = [];
+
+      for (let day=1; day<=fin.getDate(); day++) {
+        const fecha = new Date(y, m, day);
+        if (fecha > now) break;
+        const fechaStr = `${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+        if (mapaFestivos[fechaStr]) { diasFestivos++; detalle.push({ fecha:fechaStr, estatus:'festivo', nombre:mapaFestivos[fechaStr].nombre }); continue; }
+        const horarioDia = getHorarioDia(h, fecha);
+        if (!horarioDia?.entrada) { diasLibres++; detalle.push({ fecha:fechaStr, estatus:'libre' }); continue; }
+        const regsDelDia = regPorEmpleadoDia[`${h.empleadoId}_${fechaStr}`] || [];
+        if (regsDelDia.length === 0) { faltas++; detalle.push({ fecha:fechaStr, estatus:'falta' }); continue; }
+        const entradas = regsDelDia.filter(r=>[0,4].includes(r.estadoPunch));
+        const salidas  = regsDelDia.filter(r=>[1,5].includes(r.estadoPunch));
+        const entrada = entradas.length>0 ? entradas.reduce((a,b)=>new Date(a.fechaHora)<new Date(b.fechaHora)?a:b) : regsDelDia.reduce((a,b)=>new Date(a.fechaHora)<new Date(b.fechaHora)?a:b);
+        const salida  = salidas.length>0  ? salidas.reduce((a,b)=>new Date(a.fechaHora)>new Date(b.fechaHora)?a:b) : regsDelDia.length>1 ? regsDelDia.reduce((a,b)=>new Date(a.fechaHora)>new Date(b.fechaHora)?a:b) : null;
+        const minFichada = new Date(entrada.fechaHora);
+        const minEntrada = horaAMinutos(horarioDia.entrada);
+        const minReal    = minFichada.getHours()*60 + minFichada.getMinutes();
+        const estatus    = minReal <= minEntrada + (h.toleranciaMinutos||5) ? 'a_tiempo' : 'retardo';
+        if (estatus==='retardo') retardos++; else aTiempo++;
+        let mins = null;
+        if (salida && new Date(salida.fechaHora) > new Date(entrada.fechaHora)) {
+          mins = Math.round((new Date(salida.fechaHora)-new Date(entrada.fechaHora))/60000);
+          totalMinutos += mins;
+        }
+        detalle.push({
+          fecha: fechaStr, estatus,
+          horaEntrada: new Date(entrada.fechaHora).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',hour12:true}),
+          horaSalida:  salida ? new Date(salida.fechaHora).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',hour12:true}) : null,
+          minutosT: mins,
+        });
+      }
+      const totalDias = aTiempo + retardos + faltas;
+      reporte.push({
+        empleadoId: h.empleadoId, nombre:`${h.nombre} ${h.apellido}`.trim(),
+        sucursal: h.sucursal, aTiempo, retardos, faltas, diasLibres, diasFestivos,
+        totalDias, puntualidad: totalDias>0 ? Math.round((aTiempo/totalDias)*100) : 100,
+        horasTotales: totalMinutos>0 ? `${Math.floor(totalMinutos/60)}h ${totalMinutos%60}m` : '0h',
+        minutosTotales: totalMinutos,
+        detalle,
+      });
+    }
+    reporte.sort((a,b)=>b.faltas-a.faltas||b.retardos-a.retardos);
+    const MESES_ES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    res.json({ ok:true, data:reporte, mes:m+1, anio:y, mesNombre:MESES_ES[m], festivosDelMes:Object.values(mapaFestivos).map(f=>f.nombre) });
+  } catch(e) {
+    console.error('[REPORTE]', e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.listen(PORT, () => {
