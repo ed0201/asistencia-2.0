@@ -225,9 +225,36 @@ app.post('/iclock/cdata', async (req, res) => {
 // Normalmente respondemos OK. Pero si hay un reenvio de historial pendiente,
 // le mandamos el comando para que vuelva a subir TODAS sus marcaciones.
 const reenvioPendiente = {}; // { 'NUMERO_SERIE': true }
+const horaPendiente   = {}; // { 'NUMERO_SERIE': true } -> ajustar reloj
+
+// Hora actual del centro de Mexico (UTC-6, sin horario de verano desde 2023).
+function horaMexico() {
+  const ahora = new Date();
+  // ahora es UTC. Restamos 6 horas para hora del centro de Mexico.
+  return new Date(ahora.getTime() - 6 * 60 * 60 * 1000);
+}
+
+// El ZKTeco codifica la fecha/hora en un entero con esta formula oficial:
+// ((anio-2000)*12*31 + (mes-1)*31 + (dia-1)) * (24*60*60)
+//   + hora*3600 + minuto*60 + segundo
+// Recibe un Date cuyos componentes UTC ya representan la hora local deseada.
+function encodearHoraZK(d) {
+  const Y = d.getUTCFullYear(), Mo = d.getUTCMonth()+1, Da = d.getUTCDate();
+  const H = d.getUTCHours(), Mi = d.getUTCMinutes(), S = d.getUTCSeconds();
+  return ((Y-2000)*12*31 + (Mo-1)*31 + (Da-1)) * 86400 + H*3600 + Mi*60 + S;
+}
 
 app.get('/iclock/getrequest', (req, res) => {
   const sn = req.query.SN || '';
+  // Comando pendiente para ajustar la hora del checador
+  if (horaPendiente[sn]) {
+    horaPendiente[sn] = false;
+    const id = Date.now();
+    const enc = encodearHoraZK(horaMexico());
+    const cmd = `C:${id}:SET OPTIONS DateTime=${enc}`;
+    console.log('[ADMS] Ajustando hora del equipo SN ' + sn + ' -> ' + horaMexico().toISOString().replace('T',' ').slice(0,19) + ' (hora MX)');
+    return res.status(200).send(cmd + '\n');
+  }
   if (reenvioPendiente[sn]) {
     reenvioPendiente[sn] = false; // solo una vez
     const id = Date.now();
@@ -257,6 +284,22 @@ app.get('/api/forzar-historial', (req, res) => {
   const equipos = Object.keys(mapaSeriesSucursal);
   equipos.forEach(s => { reenvioPendiente[s] = true; });
   res.json({ ok:true, mensaje:'En unos segundos los equipos reenviaran su historial. Revisa los Deploy Logs.', equipos });
+});
+
+// Boton para ajustar la HORA del checador (hora del centro de Mexico, UTC-6).
+// Se abre en el navegador:
+//   .../api/ajustar-hora          -> todos los equipos conocidos
+//   .../api/ajustar-hora?SN=XXXX   -> solo ese equipo
+app.get('/api/ajustar-hora', (req, res) => {
+  const sn = (req.query.SN || '').trim();
+  const ahora = horaMexico().toISOString().replace('T',' ').slice(0,19);
+  if (sn) {
+    horaPendiente[sn] = true;
+    return res.json({ ok:true, mensaje:'En unos segundos el equipo '+sn+' ajustara su reloj a '+ahora+' (hora MX). Marca una huella para que conecte y aplique.' });
+  }
+  const equipos = Object.keys(mapaSeriesSucursal);
+  equipos.forEach(s => { horaPendiente[s] = true; });
+  res.json({ ok:true, mensaje:'En unos segundos los equipos ajustaran su reloj a '+ahora+' (hora MX). Marca una huella en cada uno para que conecten y apliquen.', equipos });
 });
 
 app.post('/api/sync', requireAgentKey, async (req, res) => {
