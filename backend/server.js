@@ -562,7 +562,18 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
       });
     }
 
-    resumen.sort((a,b) => b.faltas-a.faltas || b.retardos-a.retardos);
+    // Ordenar por ID de empleado: primero los de 3 digitos (001..008) en
+    // orden ascendente, y al final los de ID corto sin ceros (ej "4").
+    // Asi queda: 001,002,003,004,005,006,007,008 y luego 4.
+    resumen.sort((a, b) => {
+      const la = String(a.empleadoId).length, lb = String(b.empleadoId).length;
+      // Los IDs mas cortos (ej "4") van al final
+      if (la !== lb) return lb - la;
+      // Misma longitud: orden numerico/alfabetico ascendente
+      const na = parseInt(a.empleadoId, 10), nb = parseInt(b.empleadoId, 10);
+      if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+      return String(a.empleadoId).localeCompare(String(b.empleadoId));
+    });
     res.json({ ok:true, data:resumen, mes:m+1, anio:y, festivosActivos:Object.values(mapaFestivos) });
   } catch(e) {
     console.error('[RESUMEN]', e);
