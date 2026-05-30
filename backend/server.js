@@ -10,6 +10,10 @@ const PORT = process.env.PORT || 8000;
 const JWT_SECRET = process.env.JWT_SECRET || 'cambia_esto_en_produccion_123';
 
 app.use(cors());
+// Las rutas del checador (/iclock) mandan TEXTO PLANO con las marcaciones.
+// Hay que leerlas como texto crudo ANTES de los parsers JSON/urlencoded,
+// si no req.body queda como objeto vacio y no se guardan las marcaciones.
+app.use('/iclock', bodyParser.text({ type: '*/*' }));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use((req, res, next) => {
@@ -183,13 +187,19 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // ─── ADMS ─────────────────────────────────────────────────────────────────────
-app.get('/iclock/cdata', (req, res) => res.status(200).send('OK'));
+app.get('/iclock/cdata', (req, res) => {
+  const sn = req.query.SN || '';
+  // Handshake inicial: el checador espera recibir su configuracion
+  console.log('[ADMS] Handshake del equipo SN:', sn);
+  res.status(200).send(`GET OPTION FROM: ${sn}\nStamp=9999\nOpStamp=9999\nErrorDelay=30\nDelay=30\nTransTimes=00:00;14:05\nTransInterval=1\nTransFlag=1111000000\nRealtime=1\nEncrypt=0\n`);
+});
 app.post('/iclock/cdata', async (req, res) => {
   const sn = req.query.SN || '';
   const sucursal = mapaSeriesSucursal[sn] || 'Desconocida';
   const tabla = req.query.table || '';
   if (tabla && tabla !== 'ATTLOG') return res.status(200).send('OK');
   const contenido = typeof req.body === 'string' ? req.body : '';
+  let guardados = 0, duplicados = 0;
   for (const linea of contenido.split('\n').filter(l => l.trim())) {
     let empleadoId, fechaHoraStr, estadoPunch = 0;
     if (linea.includes('\t')) {
@@ -205,10 +215,18 @@ app.post('/iclock/cdata', async (req, res) => {
     if (isNaN(fechaHora)) continue;
     try {
       await Registro.create({ empleadoId, fechaHora, sucursal, estadoPunch, tipoEvento: PUNCH_STATE_MAP[estadoPunch]||'Desconocido', fuente:'adms', numeroSerie:sn });
-    } catch(e) { if (e.code !== 11000) console.error('[ADMS]', e.message); }
+      guardados++;
+    } catch(e) { if (e.code === 11000) duplicados++; else console.error('[ADMS]', e.message); }
   }
+  if (guardados || duplicados) console.log(`[ADMS] ${sucursal} (SN ${sn}): ${guardados} nuevos, ${duplicados} duplicados`);
   res.status(200).send('OK');
 });
+// El checador pregunta periodicamente si hay comandos pendientes. No tenemos
+// comandos que enviarle, asi que respondemos OK para que no marque error.
+app.get('/iclock/getrequest', (req, res) => res.status(200).send('OK'));
+app.post('/iclock/getrequest', (req, res) => res.status(200).send('OK'));
+app.get('/iclock/devicecmd', (req, res) => res.status(200).send('OK'));
+app.post('/iclock/devicecmd', (req, res) => res.status(200).send('OK'));
 
 app.post('/api/sync', requireAgentKey, async (req, res) => {
   const { registros, sucursal, agentVersion } = req.body;
