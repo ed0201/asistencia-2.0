@@ -221,12 +221,43 @@ app.post('/iclock/cdata', async (req, res) => {
   if (guardados || duplicados) console.log(`[ADMS] ${sucursal} (SN ${sn}): ${guardados} nuevos, ${duplicados} duplicados`);
   res.status(200).send('OK');
 });
-// El checador pregunta periodicamente si hay comandos pendientes. No tenemos
-// comandos que enviarle, asi que respondemos OK para que no marque error.
-app.get('/iclock/getrequest', (req, res) => res.status(200).send('OK'));
+// El checador pregunta periodicamente si hay comandos pendientes (getrequest).
+// Normalmente respondemos OK. Pero si hay un reenvio de historial pendiente,
+// le mandamos el comando para que vuelva a subir TODAS sus marcaciones.
+const reenvioPendiente = {}; // { 'NUMERO_SERIE': true }
+
+app.get('/iclock/getrequest', (req, res) => {
+  const sn = req.query.SN || '';
+  if (reenvioPendiente[sn]) {
+    reenvioPendiente[sn] = false; // solo una vez
+    const id = Date.now();
+    const cmd = `C:${id}:DATA QUERY ATTLOG StartTime=2020-01-01 00:00:00\tEndTime=2035-12-31 23:59:59`;
+    console.log('[ADMS] Ordenando reenvio de historial a SN:', sn);
+    return res.status(200).send(cmd + '\n');
+  }
+  res.status(200).send('OK');
+});
 app.post('/iclock/getrequest', (req, res) => res.status(200).send('OK'));
 app.get('/iclock/devicecmd', (req, res) => res.status(200).send('OK'));
-app.post('/iclock/devicecmd', (req, res) => res.status(200).send('OK'));
+app.post('/iclock/devicecmd', (req, res) => {
+  // El checador reporta el resultado del comando. Solo confirmamos.
+  console.log('[ADMS] Equipo confirmo comando:', (typeof req.body === 'string' ? req.body : '').slice(0, 120));
+  res.status(200).send('OK');
+});
+
+// Boton para forzar el reenvio del historial. Se abre en el navegador:
+//   .../api/forzar-historial          -> todos los equipos conocidos
+//   .../api/forzar-historial?SN=XXXX   -> solo ese equipo
+app.get('/api/forzar-historial', (req, res) => {
+  const sn = (req.query.SN || '').trim();
+  if (sn) {
+    reenvioPendiente[sn] = true;
+    return res.json({ ok:true, mensaje:'En unos segundos el equipo '+sn+' reenviara todo su historial. Revisa los Deploy Logs.' });
+  }
+  const equipos = Object.keys(mapaSeriesSucursal);
+  equipos.forEach(s => { reenvioPendiente[s] = true; });
+  res.json({ ok:true, mensaje:'En unos segundos los equipos reenviaran su historial. Revisa los Deploy Logs.', equipos });
+});
 
 app.post('/api/sync', requireAgentKey, async (req, res) => {
   const { registros, sucursal, agentVersion } = req.body;
