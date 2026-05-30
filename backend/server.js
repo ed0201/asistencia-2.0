@@ -274,6 +274,38 @@ app.post('/api/sync', requireAgentKey, async (req, res) => {
   res.json({ ok:true, guardados, duplicados, errores });
 });
 
+// Renombrar el empleadoId de registros viejos. Util cuando alguien marcaba
+// con un id corto (ej "8") y ahora usa el id correcto (ej "008").
+// Se abre en el navegador:
+//   .../api/renombrar-id?de=8&a=008
+// Maneja choques con el indice unico: si ya existe un registro identico con
+// el id nuevo (misma fecha/hora/sucursal), borra el viejo duplicado.
+app.get('/api/renombrar-id', async (req, res) => {
+  const de = (req.query.de || '').trim();
+  const a  = (req.query.a  || '').trim();
+  if (!de || !a) return res.status(400).json({ ok:false, error:'Faltan parametros. Usa ?de=8&a=008' });
+
+  const viejos = await Registro.find({ empleadoId: de }).lean();
+  let renombrados = 0, duplicadosBorrados = 0, errores = 0;
+
+  for (const r of viejos) {
+    try {
+      // Intentar mover el registro al id nuevo
+      await Registro.updateOne({ _id: r._id }, { $set: { empleadoId: a } });
+      renombrados++;
+    } catch (e) {
+      if (e.code === 11000) {
+        // Ya existe un registro identico con el id nuevo: borrar el viejo
+        try { await Registro.deleteOne({ _id: r._id }); duplicadosBorrados++; }
+        catch (e2) { errores++; }
+      } else { errores++; }
+    }
+  }
+
+  console.log(`[RENOMBRAR] ${de} -> ${a}: ${renombrados} movidos, ${duplicadosBorrados} duplicados borrados, ${errores} errores`);
+  res.json({ ok:true, de, a, encontrados: viejos.length, renombrados, duplicadosBorrados, errores });
+});
+
 // ─── API Festivos ─────────────────────────────────────────────────────────────
 
 // GET todos los festivos (opcionalmente por año)
@@ -378,9 +410,15 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
     }
 
     const [registros, horarios] = await Promise.all([
-      Registro.find({ fechaHora:{ $gte:inicio, $lte:fin }, tipoRegistro:'Asistencia', ...filtroSuc }).sort({ fechaHora:1 }).lean(),
+      Registro.find({ fechaHora:{ $gte:inicio, $lte:fin }, tipoRegistro:'Asistencia' }).sort({ fechaHora:1 }).lean(),
       Horario.find({ activo:true }).lean(),
     ]);
+
+    // Mapa empleadoId -> sucursal del empleado (segun su horario).
+    // Asi un empleado se evalua por SU sucursal, sin importar en cual
+    // checador marco fisicamente (puede marcar entrada en una y salida en otra).
+    const sucursalDeEmpleado = {};
+    for (const h of horarios) sucursalDeEmpleado[h.empleadoId] = h.sucursal;
 
     // Agrupar registros por empleadoId + fecha
     const regPorEmpleadoDia = {};
@@ -391,6 +429,12 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
       if (!regPorEmpleadoDia[key]) regPorEmpleadoDia[key] = [];
       regPorEmpleadoDia[key].push(r);
     }
+
+    // Si se filtra por sucursal, filtrar EMPLEADOS por su sucursal de casa,
+    // no los registros por donde marcaron.
+    const horariosFiltrados = (sucursal && sucursal!=='Todas')
+      ? horarios.filter(h => h.sucursal === sucursal)
+      : horarios;
 
     const resumen = [];
     for (const h of horarios) {
