@@ -457,6 +457,19 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
       Horario.find({ activo:true }).lean(),
     ]);
 
+    // Cargar justificaciones del mes (Enfermedad/Vacaciones/Comision) y
+    // mapearlas por empleado+dia para descontar faltas y etiquetar el dia.
+    const justificaciones = await Registro.find({
+      fechaHora:{ $gte:inicio, $lte:fin },
+      tipoRegistro:{ $in:['Enfermedad','Vacaciones','Comisión'] },
+    }).lean();
+    const justifPorEmpleadoDia = {};
+    for (const j of justificaciones) {
+      const d = new Date(j.fechaHora);
+      const fk = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      justifPorEmpleadoDia[`${j.empleadoId}_${fk}`] = j.tipoRegistro;
+    }
+
     // Mapa empleadoId -> sucursal del empleado (segun su horario).
     // Asi un empleado se evalua por SU sucursal, sin importar en cual
     // checador marco fisicamente (puede marcar entrada en una y salida en otra).
@@ -481,7 +494,7 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
 
     const resumen = [];
     for (const h of horarios) {
-      let aTiempo=0, retardos=0, faltas=0, diasLibres=0, diasFestivos=0, totalMinutos=0;
+      let aTiempo=0, retardos=0, faltas=0, diasLibres=0, diasFestivos=0, justificados=0, totalMinutos=0;
       const detalleDias = [];
 
       for (let day=1; day<=fin.getDate(); day++) {
@@ -504,6 +517,14 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
         if (!horarioDia?.entrada) {
           diasLibres++;
           detalleDias.push({ fecha:fechaStr, estatus:'libre' });
+          continue;
+        }
+
+        // ── Si el dia esta justificado, no cuenta como falta ───────────────
+        const justif = justifPorEmpleadoDia[key];
+        if (justif) {
+          justificados++;
+          detalleDias.push({ fecha:fechaStr, estatus:'justificado', tipoJustificacion:justif });
           continue;
         }
 
@@ -555,7 +576,7 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
 
       resumen.push({
         empleadoId: h.empleadoId, nombre:`${h.nombre} ${h.apellido}`.trim(), sucursal: h.sucursal,
-        aTiempo, retardos, faltas, diasLibres, diasFestivos, total:totalDias,
+        aTiempo, retardos, faltas, diasLibres, diasFestivos, justificados, total:totalDias,
         puntualidad: totalDias>0 ? Math.round((aTiempo/totalDias)*100) : 100,
         horasTotales: totalMinutos>0 ? `${hh}h ${mm}m` : null,
         detalleDias,
@@ -709,6 +730,69 @@ app.post('/api/registros/manual', requireAuth, async (req, res) => {
     if (!empleadoId||!sucursal||!tipoRegistro) return res.status(400).json({ error:'Faltan campos' });
     const r = await Registro.create({ empleadoId:empleadoId.trim(), fechaHora:new Date(), sucursal, tipoRegistro, estadoPunch:0, tipoEvento:'Entrada', fuente:'manual', numeroSerie:'MANUAL' });
     res.status(201).json({ ok:true, data:r });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Justificar uno o varios dias (incluso pasados). Crea una justificacion por
+// cada dia del rango. tipoRegistro: Enfermedad | Vacaciones | Comisión.
+//   body: { empleadoId, sucursal, tipoRegistro, fechaInicio:'2026-05-01', fechaFin:'2026-05-03' }
+//   Si solo mandas fechaInicio, justifica ese unico dia.
+app.post('/api/justificar', requireAuth, async (req, res) => {
+  try {
+    const { empleadoId, sucursal, tipoRegistro, fechaInicio, fechaFin } = req.body;
+    if (!empleadoId || !sucursal || !tipoRegistro || !fechaInicio)
+      return res.status(400).json({ error:'Faltan campos: empleadoId, sucursal, tipoRegistro, fechaInicio' });
+    if (!['Enfermedad','Vacaciones','Comisión'].includes(tipoRegistro))
+      return res.status(400).json({ error:'tipoRegistro debe ser Enfermedad, Vacaciones o Comisión' });
+
+    const ini = new Date(fechaInicio + 'T12:00:00');
+    const fin = fechaFin ? new Date(fechaFin + 'T12:00:00') : new Date(ini);
+    if (isNaN(ini) || isNaN(fin)) return res.status(400).json({ error:'Fechas invalidas (usa AAAA-MM-DD)' });
+    if (fin < ini) return res.status(400).json({ error:'La fecha fin es anterior a la fecha inicio' });
+
+    let creados = 0, yaExistian = 0;
+    const cursor = new Date(ini);
+    while (cursor <= fin) {
+      const f = new Date(cursor);
+      f.setHours(12,0,0,0); // mediodia para evitar lios de zona horaria
+      const ini0 = new Date(f); ini0.setHours(0,0,0,0);
+      const fin0 = new Date(f); fin0.setHours(23,59,59,999);
+      // Evitar duplicar justificacion en el mismo dia
+      const existe = await Registro.findOne({
+        empleadoId: empleadoId.trim(),
+        fechaHora: { $gte: ini0, $lte: fin0 },
+        tipoRegistro: { $in:['Enfermedad','Vacaciones','Comisión'] },
+      });
+      if (existe) { yaExistian++; }
+      else {
+        await Registro.create({
+          empleadoId: empleadoId.trim(), fechaHora: f, sucursal, tipoRegistro,
+          estadoPunch: 0, tipoEvento: 'Entrada', fuente: 'manual', numeroSerie: 'MANUAL',
+        });
+        creados++;
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    res.status(201).json({ ok:true, empleadoId, tipoRegistro, creados, yaExistian });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Quitar una justificacion de un dia (por si te equivocas).
+//   body: { empleadoId, fecha:'2026-05-01' }
+app.post('/api/justificar/quitar', requireAuth, async (req, res) => {
+  try {
+    const { empleadoId, fecha } = req.body;
+    if (!empleadoId || !fecha) return res.status(400).json({ error:'Faltan campos: empleadoId, fecha' });
+    const f = new Date(fecha + 'T12:00:00');
+    if (isNaN(f)) return res.status(400).json({ error:'Fecha invalida (usa AAAA-MM-DD)' });
+    const ini0 = new Date(f); ini0.setHours(0,0,0,0);
+    const fin0 = new Date(f); fin0.setHours(23,59,59,999);
+    const r = await Registro.deleteMany({
+      empleadoId: empleadoId.trim(),
+      fechaHora: { $gte: ini0, $lte: fin0 },
+      tipoRegistro: { $in:['Enfermedad','Vacaciones','Comisión'] },
+    });
+    res.json({ ok:true, eliminados: r.deletedCount });
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
