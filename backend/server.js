@@ -410,6 +410,81 @@ app.delete('/api/festivos/:id', requireAuth, async (req, res) => {
 });
 
 // ─── API Registros ────────────────────────────────────────────────────────────
+// Editar la fecha/hora o el tipo de evento de una marcacion (por _id).
+//   body: { fechaHora:'2026-06-01T08:05:00', estadoPunch:0 }  (ambos opcionales)
+app.put('/api/registros/:id', requireAuth, async (req, res) => {
+  try {
+    const { fechaHora, estadoPunch } = req.body;
+    const set = {};
+    if (fechaHora) {
+      const f = new Date(fechaHora);
+      if (isNaN(f)) return res.status(400).json({ error:'fechaHora invalida' });
+      set.fechaHora = f;
+    }
+    if (estadoPunch !== undefined) {
+      const ep = parseInt(estadoPunch);
+      set.estadoPunch = ep;
+      set.tipoEvento  = PUNCH_STATE_MAP[ep] || 'Desconocido';
+    }
+    if (!Object.keys(set).length) return res.status(400).json({ error:'Nada que actualizar' });
+    const r = await Registro.findByIdAndUpdate(req.params.id, { $set:set }, { new:true });
+    if (!r) return res.status(404).json({ error:'Registro no encontrado' });
+    res.json({ ok:true, data:r });
+  } catch(e) {
+    if (e.code === 11000) return res.status(409).json({ error:'Ya existe una marcacion igual en esa fecha/hora' });
+    res.status(500).json({ error:e.message });
+  }
+});
+
+// Borrar una marcacion (por _id).
+app.delete('/api/registros/:id', requireAuth, async (req, res) => {
+  try {
+    const r = await Registro.findByIdAndDelete(req.params.id);
+    if (!r) return res.status(404).json({ error:'Registro no encontrado' });
+    res.json({ ok:true, eliminado:r._id });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// Agregar una marcacion manual con fecha/hora especifica (para correcciones).
+//   body: { empleadoId, sucursal, fechaHora:'2026-06-01T08:00:00', estadoPunch:0 }
+app.post('/api/registros/agregar', requireAuth, async (req, res) => {
+  try {
+    const { empleadoId, sucursal, fechaHora, estadoPunch=0 } = req.body;
+    if (!empleadoId || !sucursal || !fechaHora) return res.status(400).json({ error:'Faltan campos: empleadoId, sucursal, fechaHora' });
+    const f = new Date(fechaHora);
+    if (isNaN(f)) return res.status(400).json({ error:'fechaHora invalida' });
+    const ep = parseInt(estadoPunch);
+    const r = await Registro.create({
+      empleadoId: String(empleadoId).trim(), fechaHora: f, sucursal,
+      estadoPunch: ep, tipoEvento: PUNCH_STATE_MAP[ep] || 'Entrada',
+      tipoRegistro: 'Asistencia', fuente: 'manual', numeroSerie: 'MANUAL',
+    });
+    res.status(201).json({ ok:true, data:r });
+  } catch(e) {
+    if (e.code === 11000) return res.status(409).json({ error:'Ya existe una marcacion igual en esa fecha/hora' });
+    res.status(500).json({ error:e.message });
+  }
+});
+
+// Ver las marcaciones por ORDEN DE LLEGADA (cuando el checador las envio),
+// sin importar la fecha que traigan. Util cuando el checador tenia mal la
+// fecha/hora: aqui ves lo que llego hoy aunque diga otra fecha.
+//   .../api/registros/recibidos          -> ultimas 100 recibidas
+//   .../api/registros/recibidos?desde=2026-06-01  -> recibidas desde esa fecha
+app.get('/api/registros/recibidos', requireAuth, async (req, res) => {
+  try {
+    const { desde, limit=100 } = req.query;
+    const filter = {};
+    if (desde) filter.createdAt = { $gte: new Date(desde + 'T00:00:00') };
+    const data = await Registro.find(filter).sort({ createdAt:-1 }).limit(Number(limit)).lean();
+    res.json({ ok:true, total:data.length, data: data.map(r => ({
+      _id: r._id, empleadoId: r.empleadoId, sucursal: r.sucursal,
+      fechaMarcada: r.fechaHora, estadoPunch: r.estadoPunch, tipoEvento: r.tipoEvento,
+      llegoEl: r.createdAt, fuente: r.fuente,
+    })) });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
 app.get('/api/registros', requireAuth, async (req, res) => {
   try {
     const { sucursal, fecha, empleadoId, page=1, limit=200 } = req.query;
