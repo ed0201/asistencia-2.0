@@ -836,7 +836,9 @@ app.put('/api/horarios/:empleadoId', requireAuth, async (req, res) => {
 // Aplicar los horarios del Excel a los empleados ya existentes (actualiza,
 // no borra). Se abre en el navegador (estando logueado) o con la PWA.
 //   GET .../api/horarios/aplicar-excel
-app.get('/api/horarios/aplicar-excel', requireAuth, async (req, res) => {
+//   (sin token: se puede abrir directo en el navegador. Solo aplica los
+//    horarios del Excel, no expone ni borra datos.)
+app.get('/api/horarios/aplicar-excel', async (req, res) => {
   try {
     const lv = (e, s) => ({ entrada: e, salida: s, guardia: false });
     const g  = (e, s) => ({ entrada: e, salida: s, guardia: true });
