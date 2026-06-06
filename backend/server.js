@@ -47,13 +47,13 @@ const HorarioSchema = new mongoose.Schema({
   sucursal:          { type: String, default: 'Ameca' },
   activo:            { type: Boolean, default: true },
   horarios: {
-    lunes:     { entrada: String, salida: String },
-    martes:    { entrada: String, salida: String },
-    miercoles: { entrada: String, salida: String },
-    jueves:    { entrada: String, salida: String },
-    viernes:   { entrada: String, salida: String },
-    sabado:    { entrada: String, salida: String },
-    domingo:   { entrada: String, salida: String },
+    lunes:     { entrada: String, salida: String, guardia: Boolean },
+    martes:    { entrada: String, salida: String, guardia: Boolean },
+    miercoles: { entrada: String, salida: String, guardia: Boolean },
+    jueves:    { entrada: String, salida: String, guardia: Boolean },
+    viernes:   { entrada: String, salida: String, guardia: Boolean },
+    sabado:    { entrada: String, salida: String, guardia: Boolean },
+    domingo:   { entrada: String, salida: String, guardia: Boolean },
   },
   toleranciaMinutos: { type: Number, default: 5 },
   notas:             { type: String, default: '' },
@@ -61,6 +61,16 @@ const HorarioSchema = new mongoose.Schema({
   fechaBaja:         { type: Date },
 }, { timestamps: true });
 const Horario = mongoose.model('Horario', HorarioSchema);
+
+// ── Modelo de Guardias manuales (asignadas por fecha especifica) ──────────────
+const GuardiaSchema = new mongoose.Schema({
+  empleadoId: { type: String, required: true },
+  fecha:      { type: String, required: true }, // YYYY-MM-DD
+  nota:       { type: String, default: '' },
+  creadoEn:   { type: Date, default: Date.now },
+});
+GuardiaSchema.index({ empleadoId: 1, fecha: 1 }, { unique: true });
+const Guardia = mongoose.model('Guardia', GuardiaSchema);
 
 // ── Modelo de Festivos (configuración guardada en BD) ─────────────────────────
 const FestivoSchema = new mongoose.Schema({
@@ -115,22 +125,29 @@ setTimeout(seedFestivos, 4000);
 async function seedHorarios() {
   const count = await Horario.countDocuments();
   if (count > 0) return;
-  const lv = (e, s) => ({ entrada: e, salida: s });
-  const empleados = [
-    { empleadoId:'001', nombre:'Esperanza Adriana', apellido:'Vazquez',   sucursal:'Ameca',       horarios:{ lunes:lv('07:00','14:30'), martes:lv('07:00','14:30'), miercoles:lv('07:00','14:30'), jueves:lv('07:00','14:30'), viernes:lv('07:00','14:30'), sabado:lv('07:00','15:30'), domingo:null }},
-    { empleadoId:'002', nombre:'Maribel',           apellido:'Quiroz',    sucursal:'Ameca',       horarios:{ lunes:lv('07:00','14:30'), martes:lv('07:00','14:30'), miercoles:lv('07:00','14:30'), jueves:lv('07:00','14:30'), viernes:lv('07:00','14:30'), sabado:null, domingo:lv('07:00','15:30') }},
-    { empleadoId:'003', nombre:'Gabriela',          apellido:'Ramirez',   sucursal:'Ameca',       horarios:{ lunes:lv('07:00','14:30'), martes:lv('07:00','14:30'), miercoles:lv('07:00','14:30'), jueves:lv('07:00','14:30'), viernes:lv('07:00','14:30'), sabado:lv('07:00','14:30'), domingo:null }},
-    { empleadoId:'004', nombre:'Hannia',            apellido:'Corona',    sucursal:'Ameca',       horarios:{ lunes:lv('08:00','17:00'), martes:lv('08:00','17:00'), miercoles:lv('08:00','17:00'), jueves:lv('08:00','17:00'), viernes:lv('08:00','17:00'), sabado:null, domingo:null }},
-    { empleadoId:'005', nombre:'Hector Abraham',    apellido:'Hernandez', sucursal:'Ameca',       horarios:{ lunes:lv('09:00','17:00'), martes:lv('09:00','17:00'), miercoles:lv('09:00','17:00'), jueves:lv('09:00','17:00'), viernes:lv('09:00','17:00'), sabado:lv('09:00','15:30'), domingo:null }},
-    { empleadoId:'006', nombre:'Ingrid',            apellido:'Gonzalez',  sucursal:'Tepetlixpa',  horarios:{ lunes:lv('07:30','15:00'), martes:lv('07:30','15:00'), miercoles:lv('07:30','15:00'), jueves:lv('07:30','15:00'), viernes:lv('07:30','15:00'), sabado:lv('07:30','15:30'), domingo:lv('07:30','15:30') }},
-    { empleadoId:'007', nombre:'Maritza Patricia',  apellido:'Reyes',     sucursal:'Tepetlixpa',  horarios:{ lunes:lv('08:30','16:00'), martes:lv('08:30','16:00'), miercoles:lv('08:30','16:00'), jueves:null, viernes:lv('08:30','16:00'), sabado:lv('07:00','15:30'), domingo:null }, notas:'Jueves día libre' },
-    { empleadoId:'008', nombre:'Luis Brallan',      apellido:'Sanchez',   sucursal:'Tepetlixpa',  horarios:{ lunes:lv('08:00','17:00'), martes:lv('08:00','17:00'), miercoles:lv('08:00','17:00'), jueves:lv('08:00','17:00'), viernes:lv('08:00','17:00'), sabado:lv('08:00','15:30'), domingo:lv('08:00','15:30') }},
-    { empleadoId:'4',   nombre:'Zecarlos',          apellido:'Vazquez',   sucursal:'Tepetlixpa',  horarios:{ lunes:lv('08:00','16:00'), martes:lv('08:00','16:00'), miercoles:lv('08:00','16:00'), jueves:lv('08:00','16:00'), viernes:lv('08:00','16:00'), sabado:lv('07:00','15:30'), domingo:lv('07:00','15:30') }},
-  ];
+  const lv = (e, s) => ({ entrada: e, salida: s, guardia: false });
+  const g  = (e, s) => ({ entrada: e, salida: s, guardia: true }); // dia de guardia
+  const empleados = HORARIOS_EXCEL(lv, g);
   await Horario.insertMany(empleados);
   console.log('✅ Horarios iniciales cargados');
 }
 setTimeout(seedHorarios, 3000);
+
+// Definicion de horarios segun el Excel (fuente unica de verdad).
+// lv = dia normal, g = dia de guardia. domingo:null = dia libre.
+function HORARIOS_EXCEL(lv, g) {
+  return [
+    { empleadoId:'001', nombre:'Esperanza Adriana', apellido:'Vazquez',   sucursal:'Ameca',      horarios:{ lunes:lv('07:00','16:00'), martes:lv('07:00','16:00'), miercoles:lv('07:00','16:00'), jueves:lv('07:00','16:00'), viernes:lv('07:00','16:00'), sabado:g('07:00','15:30'), domingo:null }},
+    { empleadoId:'002', nombre:'Maribel',           apellido:'Quiroz',    sucursal:'Ameca',      horarios:{ lunes:lv('07:00','14:30'), martes:lv('07:00','14:30'), miercoles:lv('07:00','14:30'), jueves:lv('07:00','14:30'), viernes:lv('07:00','14:30'), sabado:lv('07:00','15:30'), domingo:null }},
+    { empleadoId:'003', nombre:'Gabriela',          apellido:'Ramirez',   sucursal:'Ameca',      horarios:{ lunes:lv('07:00','14:30'), martes:lv('07:00','14:30'), miercoles:lv('07:00','14:30'), jueves:lv('07:00','14:30'), viernes:lv('07:00','14:30'), sabado:lv('07:00','15:30'), domingo:null }},
+    { empleadoId:'004', nombre:'Hannia',            apellido:'Corona',    sucursal:'Ameca',      horarios:{ lunes:lv('07:00','16:00'), martes:lv('07:00','16:00'), miercoles:lv('07:00','16:00'), jueves:lv('07:00','16:00'), viernes:lv('07:00','16:00'), sabado:g('07:00','15:30'), domingo:null }},
+    { empleadoId:'005', nombre:'Hector Abraham',    apellido:'Hernandez', sucursal:'Ameca',      horarios:{ lunes:lv('09:00','16:00'), martes:lv('09:00','16:00'), miercoles:lv('09:00','16:00'), jueves:lv('09:00','16:00'), viernes:lv('09:00','16:00'), sabado:lv('09:00','15:30'), domingo:null }},
+    { empleadoId:'006', nombre:'Ingrid',            apellido:'Gonzalez',  sucursal:'Tepetlixpa', horarios:{ lunes:lv('07:00','14:30'), martes:lv('07:00','14:30'), miercoles:lv('07:00','14:30'), jueves:lv('07:00','14:30'), viernes:lv('07:00','14:30'), sabado:null, domingo:lv('07:00','15:30') }},
+    { empleadoId:'007', nombre:'Maritza Patricia',  apellido:'Reyes',     sucursal:'Tepetlixpa', horarios:{ lunes:lv('08:30','16:00'), martes:lv('08:30','16:00'), miercoles:lv('08:30','16:00'), jueves:lv('08:30','16:00'), viernes:lv('08:30','16:00'), sabado:lv('07:00','15:30'), domingo:null }},
+    { empleadoId:'008', nombre:'Luis Brallan',      apellido:'Sanchez',   sucursal:'Tepetlixpa', horarios:{ lunes:lv('07:00','16:00'), martes:lv('07:00','16:00'), miercoles:lv('07:00','16:00'), jueves:lv('07:00','16:00'), viernes:lv('07:00','16:00'), sabado:g('07:00','15:30'), domingo:g('07:00','15:30') }},
+    { empleadoId:'4',   nombre:'Zecarlos',          apellido:'Vazquez',   sucursal:'Tepetlixpa', horarios:{ lunes:lv('08:00','16:00'), martes:lv('08:00','16:00'), miercoles:lv('08:00','16:00'), jueves:lv('08:00','16:00'), viernes:lv('08:00','16:00'), sabado:lv('07:00','15:30'), domingo:null }},
+  ];
+}
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 const AGENT_KEY = process.env.AGENT_KEY || 'clave_agente_secreta_456';
@@ -224,8 +241,27 @@ app.post('/iclock/cdata', async (req, res) => {
 // El checador pregunta periodicamente si hay comandos pendientes (getrequest).
 // Normalmente respondemos OK. Pero si hay un reenvio de historial pendiente,
 // le mandamos el comando para que vuelva a subir TODAS sus marcaciones.
-const reenvioPendiente = {}; // { 'NUMERO_SERIE': true }
+const reenvioPendiente = {}; // { 'NUMERO_SERIE': true }  -> reenvio de TODO el historial
+const reenvioDiaPendiente = {}; // { 'NUMERO_SERIE': true } -> reenvio solo del dia de hoy
 const horaPendiente   = {}; // { 'NUMERO_SERIE': true } -> ajustar reloj
+
+// Programador: 2 veces al dia (10:00 y 15:50 hora MX) pide a cada checador
+// que reenvie las marcaciones del dia, como respaldo por si alguna se perdio
+// en tiempo real. Revisa cada minuto si toca alguna de esas horas.
+let ultimoBarrido = '';
+setInterval(() => {
+  const mx = horaMexico();
+  const hh = mx.getUTCHours();   // horaMexico() ya viene desfasada a hora local MX
+  const mm = mx.getUTCMinutes();
+  const marca = `${mx.getUTCFullYear()}-${mx.getUTCMonth()}-${mx.getUTCDate()}-${hh}:${mm}`;
+  const esHoraBarrido = (hh === 10 && mm === 0) || (hh === 15 && mm === 50);
+  if (esHoraBarrido && marca !== ultimoBarrido) {
+    ultimoBarrido = marca;
+    const equipos = Object.keys(mapaSeriesSucursal);
+    equipos.forEach(sn => { reenvioDiaPendiente[sn] = true; });
+    console.log(`[BARRIDO] ${hh}:${String(mm).padStart(2,'0')} hora MX - pidiendo reenvio del dia a:`, equipos.join(', '));
+  }
+}, 60 * 1000); // cada minuto
 
 // Hora actual del centro de Mexico (UTC-6, sin horario de verano desde 2023).
 function horaMexico() {
@@ -260,6 +296,15 @@ app.get('/iclock/getrequest', (req, res) => {
     const id = Date.now();
     const cmd = `C:${id}:DATA QUERY ATTLOG StartTime=2020-01-01 00:00:00\tEndTime=2035-12-31 23:59:59`;
     console.log('[ADMS] Ordenando reenvio de historial a SN:', sn);
+    return res.status(200).send(cmd + '\n');
+  }
+  if (reenvioDiaPendiente[sn]) {
+    reenvioDiaPendiente[sn] = false; // solo una vez por barrido
+    const id = Date.now();
+    const mx = horaMexico();
+    const hoy = `${mx.getUTCFullYear()}-${String(mx.getUTCMonth()+1).padStart(2,'0')}-${String(mx.getUTCDate()).padStart(2,'0')}`;
+    const cmd = `C:${id}:DATA QUERY ATTLOG StartTime=${hoy} 00:00:00\tEndTime=${hoy} 23:59:59`;
+    console.log('[BARRIDO] Pidiendo marcaciones del dia a SN ' + sn + ' (' + hoy + ')');
     return res.status(200).send(cmd + '\n');
   }
   res.status(200).send('OK');
@@ -545,9 +590,13 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
       justifPorEmpleadoDia[`${j.empleadoId}_${fk}`] = j.tipoRegistro;
     }
 
+    // Cargar guardias manuales del mes (asignadas por fecha)
+    const mesGuardiaStr = String(m+1).padStart(2,'0');
+    const guardiasManuales = await Guardia.find({ fecha: new RegExp(`^${y}-${mesGuardiaStr}`) }).lean();
+    const guardiaManualPorDia = {}; // empleadoId_fecha -> true
+    for (const gm of guardiasManuales) guardiaManualPorDia[`${gm.empleadoId}_${gm.fecha}`] = true;
+
     // Mapa empleadoId -> sucursal del empleado (segun su horario).
-    // Asi un empleado se evalua por SU sucursal, sin importar en cual
-    // checador marco fisicamente (puede marcar entrada en una y salida en otra).
     const sucursalDeEmpleado = {};
     for (const h of horarios) sucursalDeEmpleado[h.empleadoId] = h.sucursal;
 
@@ -569,7 +618,7 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
 
     const resumen = [];
     for (const h of horarios) {
-      let aTiempo=0, retardos=0, faltas=0, diasLibres=0, diasFestivos=0, justificados=0, totalMinutos=0;
+      let aTiempo=0, retardos=0, faltas=0, diasLibres=0, diasFestivos=0, justificados=0, guardias=0, totalMinutos=0;
       const detalleDias = [];
 
       for (let day=1; day<=fin.getDate(); day++) {
@@ -621,8 +670,12 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
           ? salidas.reduce((a,b) => new Date(a.fechaHora)>new Date(b.fechaHora)?a:b)
           : regsDelDia.length > 1 ? regsDelDia.reduce((a,b) => new Date(a.fechaHora)>new Date(b.fechaHora)?a:b) : null;
 
+        // ¿Es guardia? Por horario fijo del dia o por asignacion manual.
+        const esGuardia = !!horarioDia.guardia || !!guardiaManualPorDia[key];
+
         const estatus = calcularEstatus(primeraEntrada.fechaHora, horarioDia, h.toleranciaMinutos);
-        if (estatus === 'retardo') retardos++; else aTiempo++;
+        if (esGuardia) { guardias++; }
+        else if (estatus === 'retardo') retardos++; else aTiempo++;
 
         let horasTrabajadas = null;
         if (ultimaSalida && new Date(ultimaSalida.fechaHora) > new Date(primeraEntrada.fechaHora)) {
@@ -638,9 +691,14 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
         }
 
         detalleDias.push({
-          fecha: fechaStr, estatus,
+          fecha: fechaStr,
+          estatus: esGuardia ? 'guardia' : estatus,
+          esGuardia,
           horaEntrada:  primeraEntrada ? new Date(primeraEntrada.fechaHora).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',hour12:true}) : null,
           horaSalida:   ultimaSalida   ? new Date(ultimaSalida.fechaHora).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',hour12:true}) : null,
+          // Sucursal donde marco la ENTRADA y donde marco la SALIDA (pueden diferir)
+          sucursalEntrada: primeraEntrada ? primeraEntrada.sucursal : null,
+          sucursalSalida:  ultimaSalida   ? ultimaSalida.sucursal   : null,
           horasTrabajadas, salidaTemprana, totalFichadas: regsDelDia.length,
         });
       }
@@ -651,7 +709,7 @@ app.get('/api/resumen', requireAuth, async (req, res) => {
 
       resumen.push({
         empleadoId: h.empleadoId, nombre:`${h.nombre} ${h.apellido}`.trim(), sucursal: h.sucursal,
-        aTiempo, retardos, faltas, diasLibres, diasFestivos, justificados, total:totalDias,
+        aTiempo, retardos, faltas, diasLibres, diasFestivos, justificados, guardias, total:totalDias,
         puntualidad: totalDias>0 ? Math.round((aTiempo/totalDias)*100) : 100,
         horasTotales: totalMinutos>0 ? `${hh}h ${mm}m` : null,
         detalleDias,
@@ -775,7 +833,57 @@ app.put('/api/horarios/:empleadoId', requireAuth, async (req, res) => {
   } catch(e) { res.status(500).json({ error:e.message }); }
 });
 
-// ─── API Stats ────────────────────────────────────────────────────────────────
+// Aplicar los horarios del Excel a los empleados ya existentes (actualiza,
+// no borra). Se abre en el navegador (estando logueado) o con la PWA.
+//   GET .../api/horarios/aplicar-excel
+app.get('/api/horarios/aplicar-excel', requireAuth, async (req, res) => {
+  try {
+    const lv = (e, s) => ({ entrada: e, salida: s, guardia: false });
+    const g  = (e, s) => ({ entrada: e, salida: s, guardia: true });
+    const lista = HORARIOS_EXCEL(lv, g);
+    let actualizados = 0;
+    for (const emp of lista) {
+      await Horario.updateOne(
+        { empleadoId: emp.empleadoId },
+        { $set: { horarios: emp.horarios } }
+      );
+      actualizados++;
+    }
+    res.json({ ok:true, actualizados, mensaje:'Horarios del Excel aplicados (incluye guardias de sábado/domingo).' });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+// ── Guardias manuales por fecha ───────────────────────────────────────────────
+// Asignar guardia a un empleado en una fecha:  POST { empleadoId, fecha, nota }
+app.post('/api/guardias', requireAuth, async (req, res) => {
+  try {
+    const { empleadoId, fecha, nota } = req.body;
+    if (!empleadoId || !fecha) return res.status(400).json({ error:'Faltan campos: empleadoId, fecha' });
+    const existe = await Guardia.findOne({ empleadoId: empleadoId.trim(), fecha });
+    if (existe) return res.json({ ok:true, yaExistia:true });
+    const gg = await Guardia.create({ empleadoId: empleadoId.trim(), fecha, nota: nota||'' });
+    res.status(201).json({ ok:true, data:gg });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+// Quitar guardia manual:  POST { empleadoId, fecha }
+app.post('/api/guardias/quitar', requireAuth, async (req, res) => {
+  try {
+    const { empleadoId, fecha } = req.body;
+    if (!empleadoId || !fecha) return res.status(400).json({ error:'Faltan campos' });
+    const r = await Guardia.deleteMany({ empleadoId: empleadoId.trim(), fecha });
+    res.json({ ok:true, eliminados:r.deletedCount });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
+// Listar guardias manuales de un mes:  GET ?mes=6&anio=2026
+app.get('/api/guardias', requireAuth, async (req, res) => {
+  try {
+    const now = new Date();
+    const y = parseInt(req.query.anio || now.getFullYear());
+    const m = String(parseInt(req.query.mes || now.getMonth()+1)).padStart(2,'0');
+    const data = await Guardia.find({ fecha: new RegExp(`^${y}-${m}`) }).lean();
+    res.json({ ok:true, data });
+  } catch(e) { res.status(500).json({ error:e.message }); }
+});
 app.get('/api/stats', requireAuth, async (req, res) => {
   try {
     const hoyI = new Date(); hoyI.setHours(0,0,0,0);
